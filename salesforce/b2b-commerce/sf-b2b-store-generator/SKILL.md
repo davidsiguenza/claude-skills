@@ -831,7 +831,7 @@ All B2B Commerce LWR branding lives **inside the site bundle**, no Builder-only 
 |----|----|
 | `sfdc_cms__brandingSet/<SET>/content.json` | Color tokens (`PrimaryAccentColor`, `_PrimaryAccentColor1..3`, `TextColor`, button colors, `LinkColor`), `BaseFont`, `SiteLogo` (must be a **server-relative path**, not an external URL — deploy fails with `None of the rules validated property: SiteLogo`). To swap the logo, deploy the new image as a **`StaticResource`** and set both `SiteLogo` and `_SiteLogoUrl` to the LWR-safe path **`/sfsites/c/resource/<ResourceName>`** (see *External assets* below). The shorter `/resource/<ResourceName>` path may deploy and the resource may return `200`, but seeded LWR Commerce headers can fail to render it. The CSS `styles.css` cannot reliably reach the logo `<img>` because the `dxp_content_layout:siteLogo` LWC renders it inside a shadow DOM. **Each Commerce Store (LWR) bundle ships with FOUR brandingSets — `B2B_Commerce` (main), `B2B_Footer`, `B2B_Home_Banner`, `B2B_Right_Panel`; seeded SDO bundles may include additional sets such as `Home_Header`. Apply the color tokens (and `LinkColor`, `TextColor`) to every branding set present; only the main commerce branding set carries the `SiteLogo` keys.** Otherwise the footer / right panel / home banner keep the template's stock colors. |
 | `sfdc_cms__themeLayout/commerceLayout/content.json` (and `myAccountLayout`) | Header / footer markup. The top promo bar is a `richTextValue` HTML string (`<div style="background-color:#1C1C1C">…</div>`) — search by visible copy ("Exclusive winter sale" in the Cursor template) and replace HTML in place. |
-| `sfdc_cms__view/home/content.json` (+ `tablet/tablet.json`, `mobile/mobile.json`) | Hero text, button labels, **hero/banner image references (MANDATORY for client branding — see below)**. The Cursor LWR template ships two stock banner images referenced in `imageInfo`: `assets/images/home-banner-2.jpg` ("Main Pods Banner", left/big hero, ~1920×600) and `assets/images/homeBanner-right.png` ("Quick Order Pods Banner", right secondary, ~960×450). **Both URLs MUST be replaced with brand-relevant external URLs** — otherwise the homepage keeps showing the Cursor stock content even after colors/copy are rebranded. The template's `tablet.json` and `mobile.json` do **not** carry `imageInfo` of their own; they inherit from `content.json`. Replace plain-text strings (e.g. `"Unleash Your Inner Power…"`). |
+| `sfdc_cms__view/home/content.json` (+ `tablet/tablet.json`, `mobile/mobile.json`) | Hero text, button labels, **hero/banner image references (MANDATORY for client branding — see below)**. The Cursor LWR template ships stock banner images referenced in `imageInfo`: `assets/images/home-banner-2.jpg` ("Main Pods Banner", left/big hero, ~1920×600), `assets/images/homeBanner-right.png` ("Quick Order Pods Banner", right secondary, ~960×450), and seeded SDO tiles such as `emergency-prep-b2b.jpg`. **Every stock/SDO URL MUST be replaced with brand-relevant external URLs** — otherwise the homepage keeps showing template or Cirrus content even after colors/copy are rebranded. The template's `tablet.json` and `mobile.json` do **not** carry `imageInfo` of their own; they inherit from `content.json`. Replace plain-text strings (e.g. `"Unleash Your Inner Power…"`, `"Emergency Prep"`, `"Discover Nature's Energy"`). |
 | `sfdc_cms__site/<SITE>/content.json` | `title` (browser tab + share metadata), `contentBody.authenticationType`. **Strip `geoBotsAllowed` before deploy — see warning below.** |
 | `sfdc_cms__styles/styles_css/styles.css` | Free-form CSS appended **after** the SLDS + `theme2.css` defaults. Best place to override DXP custom properties (`--dxp-g-brand`, `--dxp-g-link`, `--dxp-g-primary`) and to swap the logo via CSS `content: url("https://…")` (preferred when the host is whitelisted) or `content: url("data:image/svg+xml;base64,…")` as a fully self-contained fallback. |
 
@@ -864,18 +864,24 @@ p.write_text(json.dumps(d, indent=2))
 "
 
 # 2. Edit JSON/CSS files (apply color tokens to ALL FOUR brandingSets, banner HTML, hero copy, styles.css)
-# 3. Replace homepage banners (MANDATORY — never leave the stock Cursor pods on a client demo)
+# 3. Replace homepage banners (MANDATORY — never leave stock Cursor/SDO/Cirrus content on a client demo)
 #    - In sfdc_cms__view/home/content.json, find both occurrences of:
 #         "imageInfo": "{\"imageInfoV1\":{\"url\":\"assets/images/home-banner-2.jpg\",...}}"
 #         "imageInfo": "{\"imageInfoV1\":{\"url\":\"assets/images/homeBanner-right.png\",...}}"
-#      and rewrite the inner "url" to a brand-relevant external image (e.g. a hero image
-#      from the client's marketing site). Update altText to a meaningful description.
+#      and any seeded SDO/Cirrus image URLs such as:
+#         "https://sfdc-ckz-b2b.s3.amazonaws.com/SDO/Commerce_Images/emergency-prep-b2b.jpg"
+#      Rewrite each inner "url" to a brand-relevant external image (e.g. a hero or product
+#      image from the client's marketing/catalog site). Update altText to a meaningful
+#      description and change visible titles such as "Emergency Prep".
 #    - The brand domain MUST already be a CspTrustedSite with isApplicableToImgSrc=true
 #      (deployed in the StaticResource / CSP step above).
 #    - Verify each new URL returns HTTP 200 with image/* Content-Type before deploying:
 #         curl -sI -A "Mozilla/5.0" "<image_url>" | head -5
 #    - Pick a wide image (>=1920px) for the main hero (renders ~1920x600) and a
 #      portrait/landscape image (>=960px) for the right panel (renders ~960x450).
+#    - Also search for custom home components such as c:parallaxcmp and replace stock
+#      titles like "Discover Nature's Energy" with brand-appropriate CSR/sustainability
+#      copy (for example "Committed to Sustainable Oral Health" for Dentaid).
 # 4. Deploy + publish
 sf project deploy start --target-org <alias> --source-dir force-app/main/default/digitalExperiences/site/<SITE_BUNDLE> --ignore-conflicts
 sf community publish --name '<Site Name>' --target-org <alias>
@@ -951,13 +957,27 @@ p.write_text(s)
 
 Verify only the desired colors remain: `grep -oE 'fill="[^"]*"' AscendumLogo.svg | sort -u` should print just the new brand color (and `none` for stroke containers).
 
-**Hero / banner image override (MANDATORY for client demos — CSP Trusted URL works here).** In `sfdc_cms__view/home/content.json` find **every** `"imageInfo": "{...\"imageInfoV1\":{\"url\":\"assets/images/<original>.<ext>\",...}}"` (the Cursor template ships exactly two: `home-banner-2.jpg` for the main hero and `homeBanner-right.png` for the right secondary panel). Rewrite the inner `url` to the brand's full `https://…` asset and replace the placeholder `altText` ("Main Pods Banner" / "Quick Order Pods Banner") with a meaningful description. The `<img>` rendered by the home banner is a regular DOM image, so the `CspTrustedSite` allow-list is enough — nothing else to do. **The `tablet/tablet.json` and `mobile/mobile.json` files do not carry their own `imageInfo`; they inherit from `content.json`, so no extra edits there.** Always sanity-check the new URLs return `HTTP/2 200` with `content-type: image/*` before deploying:
+**Hero / banner image override (MANDATORY for client demos — CSP Trusted URL works here).** In `sfdc_cms__view/home/content.json` find **every** `"imageInfo": "{...\"imageInfoV1\":{\"url\":\"...\",...}}"` whose inner `url` is a stock template, SDO, or Cirrus image. The Cursor template ships `home-banner-2.jpg` for the main hero and `homeBanner-right.png` for the right secondary panel; B2B Commerce Enhanced seeded bundles can also include SDO images such as `emergency-prep-b2b.jpg` with visible text like `Emergency Prep`. Rewrite every such inner `url` to the brand's full `https://…` asset and replace the placeholder `altText` and visible text with a meaningful brand/category description. The `<img>` rendered by the home banner is a regular DOM image, so the `CspTrustedSite` allow-list is enough — nothing else to do. **The `tablet/tablet.json` and `mobile/mobile.json` files do not carry their own `imageInfo`; they inherit from `content.json`, so no extra edits there.** Always sanity-check the new URLs return `HTTP/2 200` with `content-type: image/*` before deploying:
 
 ```text
 curl -sI -A "Mozilla/5.0" "<image_url>" | head -5
 ```
 
-> **Skipping this step is the #1 way to ship a "branded" demo that still looks like the Cursor template.** Colors, copy and logo only get you ~70% of the way; the two banner images dominate the homepage above the fold. Always rebrand both.
+> **Skipping this step is the #1 way to ship a "branded" demo that still looks like the Cursor/SDO template.** Colors, copy and logo only get you ~70% of the way; home banners and seeded category tiles dominate the page. Always search the full home JSON for `assets/images/`, `sfdc-ckz-b2b.s3.amazonaws.com/SDO/Commerce_Images`, `Emergency Prep`, `Discover Nature`, `Solar`, `Energy`, `Wind`, `Battery`, and `Cirrus`.
+
+**Parallax / custom component cleanup.** Seeded B2B bundles can include custom components such as `c:parallaxcmp` with stock attributes:
+
+```json
+{
+  "definition": "c:parallaxcmp",
+  "attributes": {
+    "backgroundImage": "windEnergy",
+    "mainTitle": "Discover Nature's Energy"
+  }
+}
+```
+
+At minimum replace `mainTitle` with a brand CSR/sustainability message. For example, for Dentaid use `Committed to Sustainable Oral Health`. If the component exposes only enumerated background images (for example `windEnergy`), changing the text is acceptable; do not leave the stock energy-themed title in a client demo.
 
 Fallback only if the asset host cannot be whitelisted **and** static resource isn’t practical: embed an SVG via `content: url("data:image/svg+xml;base64,<BASE64>")` — but this only works for elements outside shadow DOM.
 
