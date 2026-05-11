@@ -80,7 +80,28 @@ Before proceeding, verify the org has the currency enabled:
 sf data query -q "SELECT IsoCode, IsActive, IsCorporate FROM CurrencyType WHERE IsoCode = '<CURRENCY>'" -o <alias>
 ```
 
-If the query returns 0 rows, **stop and tell the user** they need to enable multi-currency (Setup → Company Information → "Activate Multiple Currencies") and add `<CURRENCY>` as an active currency (Setup → Manage Currencies → New). The skill cannot enable currencies via API — it's a gated org-level setting. If `IsCorporate = true` and matches `<CURRENCY>`, no further action is needed. If the corporate currency is different, the skill still works but **every** buyer-facing User must be explicitly set to `<CURRENCY>` (see Phase E and Phase A's Guest User setup).
+If the query returns 0 rows, **try the CLI/API path before falling back to Setup**. In SDOs and many sandboxes, multi-currency can be enabled and currencies can be added from the CLI; do not tell the user it is impossible until the target org rejects these commands.
+
+```bash
+# 1. Detect whether the org already exposes CurrencyType.
+sf data query -q "SELECT IsoCode, IsActive, IsCorporate FROM CurrencyType ORDER BY IsoCode" -o <alias>
+
+# 2. If CurrencyType is not supported yet, try to enable multi-currency through OrgPreferenceSettings.
+# Some org families expose this setting; some return an error and require the UI fallback below.
+sf data update record -s OrgPreferenceSettings -i OrgPreferenceSettings -v "IsMultiCurrencyEnabled=true" -o <alias>
+
+# 3. Add or activate the target currency.
+sf data create record -s CurrencyType -v "IsoCode=<CURRENCY> ConversionRate=1.0 DecimalPlaces=2 IsActive=true" -o <alias>
+# If the create reports a duplicate/inactive row, update the existing CurrencyType instead:
+sf data update record -s CurrencyType -i <CURRENCY_TYPE_ID> -v "IsActive=true" -o <alias>
+
+# 4. Re-query and proceed only when the row is active.
+sf data query -q "SELECT Id, IsoCode, IsActive, IsCorporate, ConversionRate FROM CurrencyType WHERE IsoCode = '<CURRENCY>'" -o <alias>
+```
+
+Use a realistic `ConversionRate` if the demo currency differs from the corporate currency and pricing comparisons matter; for isolated demos, `1.0` is acceptable as a bootstrap default and can be adjusted later. If the org rejects `OrgPreferenceSettings` or `CurrencyType` DML, then use the UI fallback: Setup → Company Information → **Activate Multiple Currencies**, then Setup → Manage Currencies → **New** / **Activate** `<CURRENCY>`.
+
+If `IsCorporate = true` and matches `<CURRENCY>`, no further action is needed. If the corporate currency is different, the skill still works but **every** buyer-facing User must be explicitly set to `<CURRENCY>` (see Phase E and Phase A's Guest User setup), and every pricebook / pricebook entry created by this skill must carry the same `CurrencyIsoCode`.
 
 Persist `<CURRENCY>` to `branding-work/<slug>/brand.json` → `currency` so the catalog generator (Phase I, or the `sf-b2b-catalog-generator` child skill) uses the same value without re-asking.
 
@@ -153,6 +174,21 @@ sf community publish --name '<Site Name>' --target-org <alias> --json
 ```
 
 **Self-registration:** set `OptionsSelfRegistrationEnabled=true`. If self-registration still fails or users are created without catalog access, set **`Network.SelfRegProfileId`** explicitly to the **community buyer** profile used for B2B storefront users (typically **`B2B Reordering Portal Buyer Profile`**—resolve **`Profile.Id`** with SOQL in the target org). The SDO reference site may show **`SelfRegProfileId` null in SOQL** while the storefront works—Commerce/LWR sites cloned via **`sf community create`** often need **`SelfRegProfileId`** set for reliable signup.
+
+> **CRITICAL — Self-registration buyer profile must be `Customer Community Plus` (CCP).** The dropdown for `SelfRegProfileId` only shows profiles that are (a) already Site Members and (b) based on a `Customer Community Plus` or `Customer Community Plus Login` license. Any other license (`External Apps`, `Partner Community`, `Salesforce`) causes either the dropdown to filter out the profile or the self-reg to fail with `FIELD_INTEGRITY_EXCEPTION` during PSG/PermSet assignment. The **only safe way** to create the shopper profile is to **clone** an existing CCP profile (e.g. `B2B Reordering Portal Buyer Profile`) via Setup → Profiles → Clone — Salesforce fixes the license to CCP during the clone and **it cannot be changed afterward**. Verify: `SELECT UserLicense.Name, UserType FROM Profile WHERE Name = '<Your Shopper Profile>'` — must return `UserLicense.Name=Customer Community Plus` and `UserType=PowerCustomerSuccess`. If it returns `Salesforce` or `External Apps`, delete the profile and re-clone.
+
+> **CRITICAL — Permission Sets assigned on self-reg must not declare `objectPermissions` on `BuyerGroup`/`BuyerGroupMember`.** If the PermissionSet (or PSG) assigned at self-reg time contains `<viewAllRecords>true</viewAllRecords>` or any `<allowRead>` / `<objectPermissions>` block for `BuyerGroup` or `BuyerGroupMember`, the self-reg transaction fails with `FIELD_INTEGRITY_EXCEPTION: The user license doesn't allow the permission: View All BuyerGroup` (or `Read BuyerGroup`). These objects' access is gated by the `B2B Buyer` PSL, which is assigned **after** the self-reg (step 6 below). Remove all `BuyerGroup`/`BuyerGroupMember` object permissions from every PermissionSet or PSG used in self-registration. Also remove `<license>` from the permset XML — a license-locked permset cannot be assigned to a CCP user.
+
+> **CRITICAL — Standard Salesforce self-reg does NOT complete B2B buyer onboarding.** It creates `User + Contact + PersonAccount` and optionally assigns a `Profile` and `PSG`, but it does **not** perform the 4 steps required for B2B catalog access. After self-reg you must run a post-registration script (Apex Queueable or anonymous Apex) that:
+> 1. Activates `BuyerAccount` (`BuyerStatus=Active`, then update `IsActive=true` in a separate DML — same two-step pattern as Phase E's bootstrap accounts).
+> 2. Adds the user's Account as `BuyerGroupMember` to at least one `BuyerGroup` linked to the `WebStore`.
+> 3. Assigns `PermissionSetLicenseAssignment` for `B2B Buyer` PSL.
+> 4. Assigns `PermissionSetAssignment` for `B2BBuyer` permset.
+> Without these 4 steps the logged-in shopper receives `INSUFFICIENT_ACCESS, You don't have access to stores.` even though the self-reg appeared to succeed.
+>
+> Use a Queueable Apex triggered on `User AfterInsert/AfterUpdate` (filter by shopper ProfileId) to automate this — plain trigger or synchronous Flow cannot do `PermissionSetLicenseAssignment` DML in the same transaction as portal-user creation (MIXED_DML_OPERATION error).
+>
+> **Session cache caveat:** if the buyer logged in before steps 1–4 were applied, the browser has cached the "no access" state. Closing all windows and reopening in incognito (fresh session) is required — simply logging out/in in the same browser is not enough.
 
 **Embedded login (guest browse vs login redirect):** align **`Network`** with the working reference store (`SDO - B2B Commerce Enhanced`) — in particular **`OptionsEmbeddedLoginEnabled=true`**. If this is **`false`**, anonymous visitors may be redirected to login instead of browsing the catalog as guests even when **`WebStore.OptionsGuestBrowsingEnabled=true`**.
 
@@ -377,6 +413,8 @@ sf data create record -s StoreIntegratedService -o <alias> -v "StoreId=<YOUR_WEB
 
 **Observation:** If **`ShippingConfigurationSet`** rows are **missing** for the new **`WebStore`**, checkout may not offer the same shipping behavior as SDO even when **`LocationId`** matches.
 
+### D.1 — API-creatable objects (do these first)
+
 1. List SDO’s sets:
 
 ```text
@@ -397,6 +435,103 @@ sf data create record -s ShippingConfigSetProduct -o <alias> -v "ShippingProfile
 ```
 
 **Platform rule:** A given **`Product2Id`** may only appear **once per WebStore** across shipping profiles—do not duplicate across two profiles for the same store (error: product already exists in a shipping profile for the web store).
+
+### D.2 — Seed RateGroup + RateArea via API (otherwise the UI hides the "New Rate" button)
+
+**Critical UX gotcha:** The Commerce Setup UI **does not let you create the first `ShippingRateGroup` from scratch** on a profile that doesn't have one. If a `ShippingConfigurationSet` has no `ShippingRateGroup`, the profile renders with no "Shipping Zones" section at all — only "Shipping Profile Details" and "Delete Shipping Profile". You cannot click "New Zone" because the container isn't there.
+
+**Workaround:** seed one `ShippingRateGroup` + **at least two `ShippingRateArea` zones** (United States + Europe) per profile via API, then the UI renders the zones section and lets you add rates.
+
+**Mandatory zones (default for every demo):**
+- **United States** — `Countries='US'`
+- **Europe** — `Countries='ES, FR, PT, IT, DE'` (extend with the demo's target country if it's elsewhere in Europe)
+
+**If the demo targets a country outside US/Europe** (e.g. Mexico, Brazil, Japan), add an extra `ShippingRateArea` for that region in addition to (or replacing) the defaults. Always confirm the country list with the user before seeding.
+
+```text
+# For each ShippingConfigurationSet created in D.1:
+RGID=$(sf data create record -s ShippingRateGroup -v "Name='Shipping Rate Group' ShippingProfileId=<PROFILE_ID>" -o <alias> --json | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['id'])")
+
+# United States zone (always)
+sf data create record -s ShippingRateArea -v "Name='United States' Countries='US' ShippingRateGroupId=$RGID" -o <alias>
+
+# Europe zone (always — extend countries if demo targets a specific EU country)
+sf data create record -s ShippingRateArea -v "Name='Europe' Countries='ES, FR, PT, IT, DE' ShippingRateGroupId=$RGID" -o <alias>
+
+# Add extra zones here if the demo targets a country outside US/Europe
+```
+
+### D.3 — MANDATORY manual UI step (rates)
+
+**Critical finding (2026-05-05, Dentaid demo):** `StandardShippingRate.ShippingCarrierMethodId` is **read-only at metadata level** (both REST API and Apex fail with `Field is not editable`). Creating rates via API leaves that field `null`, so `StandardShipment` returns zero methods at checkout → error 400 `can't deliver this item` or `Region Code is not supported`.
+
+**The only path that works** is the Commerce Setup UI, which creates the `ShippingCarrierMethod` automatically when you add a rate with a new Rate Name:
+
+1. **Setup → Commerce → Stores → `<Your Store>` → Administration → Checkout → Shipping** (NOT "Shipping Rates" in classic Setup — that one is for Order Management, not checkout).
+2. Open each profile seeded in D.2 — at minimum the **default** one (`IsDefault=true`).
+3. If you need more zones than the ones seeded in D.2, click **New Zone** (works now that a RateGroup exists).
+4. Inside **each zone** (United States + Europe + any extra), click **New Rate** and create **exactly these two rates with NO conditions**:
+
+   | Rate Name | Price | Transit Time | Conditions |
+   |---|---|---|---|
+   | `Standard` | `0` (free) | e.g. 3-5 days | **Leave blank — no conditions** |
+   | `Fast` | `5` | e.g. 1-2 days | **Leave blank — no conditions** |
+
+   - Currency must match the WebStore's currency (see D.5 — typically `EUR` for Spain demos, `USD` for US demos).
+   - Save each rate. The `ShippingCarrierMethod` is created automatically behind the scenes.
+   - **Do NOT add condition rules** (weight ranges, order totals, etc.) — leaving conditions blank ensures the rate matches every cart unconditionally. If a rate has a condition that the cart doesn't satisfy, checkout shows zero methods and breaks.
+
+5. In the **Products** section of the profile, click **Manage** and either:
+   - Assign a Product2 from your catalog that acts as the "shipping charge product" (any simple active Product2 will do — it's what the engine uses to bill the shipping line), OR
+   - Move the existing shipping-charge product from the cloned SDO profile (see **cleanup** below).
+
+### D.4 — Post-API cleanup (delete SDO ghosts)
+
+After cloning, check for `ShippingConfigSetProduct` rows still pointing to SDO shipping profiles (profile `TargetRecordId != YourWebStoreId`):
+
+```text
+sf data query -q "SELECT Id, ShippingProfileId, Product2Id, Product2.Name FROM ShippingConfigSetProduct" -o <alias>
+```
+
+Any row whose `ShippingProfileId` belongs to an SDO store (not your new one) is a **ghost from the clone** and must be deleted, otherwise shipping for those products resolves against a non-existent zone and breaks checkout with `"can't deliver this item"`:
+
+```text
+sf data delete record -s ShippingConfigSetProduct -i <GHOST_ID> -o <alias>
+```
+
+### D.5 — Currency × Country matrix
+
+`StandardShipment` matches rates by `ShippingRateArea.Countries` **and** `StandardShippingRate.CurrencyIsoCode` — both must align with the cart. If the store has multiple `SupportedCurrencies`, you need **one full set of rates per currency per zone**, otherwise the buyer sees no methods when their cart is in the "wrong" currency.
+
+Practical recommendations:
+
+- For demo stores, **set `WebStore.SupportedCurrencies` to a single currency** matching the target buyer persona (e.g. `EUR` for a Spain demo). Update the WebStore via Apex if it was cloned with `USD;EUR`:
+
+  ```apex
+  WebStore ws = [SELECT Id, SupportedCurrencies FROM WebStore WHERE Id='<WebStore_Id>'];
+  ws.SupportedCurrencies = 'EUR';
+  update ws;
+  ```
+
+- If you keep multiple currencies, duplicate every rate in every currency. A 2-country × 2-currency × 3-speed matrix = 12 rates — all manual via UI.
+
+### D.6 — Debugging tips when checkout fails at shipping
+
+- `CartValidationOutput` with message `"No Shipping Rates are configured for this selection for the web Store <Id>"` → the default profile has no rate matching the delivery country **+ currency** combo → return to D.3/D.5.
+- `CartValidationOutput` never appears **and** the 400 response mentions `Region Code is not supported` → the rate's carrier method is missing (rate created via API with `ShippingCarrierMethodId=null`). Delete the API-created rate and re-create it via D.3 UI.
+- Browser console shows `409 Conflict` or `CHECKOUT_FORM_BUSY` during retries → there are `WebCart` rows stuck in `Status='Checkout'` **and/or** orphaned `CartCheckoutSession` rows from previous failed attempts. Nuke both:
+
+  ```apex
+  List<WebCart> open = [SELECT Id FROM WebCart WHERE WebStoreId='<Id>' AND Status='Checkout'];
+  for (WebCart c : open) c.Status='Closed';
+  update open;
+  delete [SELECT Id FROM CartCheckoutSession];
+  ```
+
+- Even after clearing DB state, a **logged-in browser session persists LWR state in `localStorage`** that points to the now-deleted `CartCheckoutSession` → the LWR app retries the dead session and surfaces `CHECKOUT_FORM_BUSY`. Fix by either:
+  - DevTools → Application → Storage → **Clear site data** for the store's `*.my.site.com` origin, then log in again, OR
+  - Test from a fresh incognito window (always works because `localStorage` is empty).
+  - Guest/incognito sessions never hit this because they don't persist state.
 
 ## Phase E — Buyer groups, buyer accounts, contacts, store association
 
@@ -694,7 +829,7 @@ All B2B Commerce LWR branding lives **inside the site bundle**, no Builder-only 
 
 | File (under `digitalExperiences/site/<SITE_BUNDLE>/`) | Purpose |
 |----|----|
-| `sfdc_cms__brandingSet/<SET>/content.json` | Color tokens (`PrimaryAccentColor`, `_PrimaryAccentColor1..3`, `TextColor`, button colors, `LinkColor`), `BaseFont`, `SiteLogo` (must be a **server-relative path**, not an external URL — deploy fails with `None of the rules validated property: SiteLogo`). To swap the logo, deploy the new image as a **`StaticResource`** and set both `SiteLogo` and `_SiteLogoUrl` to **`/resource/<ResourceName>`** (see *External assets* below). The CSS `styles.css` cannot reach the logo `<img>` because the `dxp_content_layout:siteLogo` LWC renders it inside a shadow DOM. **Each Commerce Store (LWR) bundle ships with FOUR brandingSets — `B2B_Commerce` (main), `B2B_Footer`, `B2B_Home_Banner`, `B2B_Right_Panel`. Apply the color tokens (and `LinkColor`, `TextColor`) to ALL four; only `B2B_Commerce` carries the `SiteLogo` keys.** Otherwise the footer / right panel / home banner keep the template's stock colors. |
+| `sfdc_cms__brandingSet/<SET>/content.json` | Color tokens (`PrimaryAccentColor`, `_PrimaryAccentColor1..3`, `TextColor`, button colors, `LinkColor`), `BaseFont`, `SiteLogo` (must be a **server-relative path**, not an external URL — deploy fails with `None of the rules validated property: SiteLogo`). To swap the logo, deploy the new image as a **`StaticResource`** and set both `SiteLogo` and `_SiteLogoUrl` to the LWR-safe path **`/sfsites/c/resource/<ResourceName>`** (see *External assets* below). The shorter `/resource/<ResourceName>` path may deploy and the resource may return `200`, but seeded LWR Commerce headers can fail to render it. The CSS `styles.css` cannot reliably reach the logo `<img>` because the `dxp_content_layout:siteLogo` LWC renders it inside a shadow DOM. **Each Commerce Store (LWR) bundle ships with FOUR brandingSets — `B2B_Commerce` (main), `B2B_Footer`, `B2B_Home_Banner`, `B2B_Right_Panel`; seeded SDO bundles may include additional sets such as `Home_Header`. Apply the color tokens (and `LinkColor`, `TextColor`) to every branding set present; only the main commerce branding set carries the `SiteLogo` keys.** Otherwise the footer / right panel / home banner keep the template's stock colors. |
 | `sfdc_cms__themeLayout/commerceLayout/content.json` (and `myAccountLayout`) | Header / footer markup. The top promo bar is a `richTextValue` HTML string (`<div style="background-color:#1C1C1C">…</div>`) — search by visible copy ("Exclusive winter sale" in the Cursor template) and replace HTML in place. |
 | `sfdc_cms__view/home/content.json` (+ `tablet/tablet.json`, `mobile/mobile.json`) | Hero text, button labels, **hero/banner image references (MANDATORY for client branding — see below)**. The Cursor LWR template ships two stock banner images referenced in `imageInfo`: `assets/images/home-banner-2.jpg` ("Main Pods Banner", left/big hero, ~1920×600) and `assets/images/homeBanner-right.png` ("Quick Order Pods Banner", right secondary, ~960×450). **Both URLs MUST be replaced with brand-relevant external URLs** — otherwise the homepage keeps showing the Cursor stock content even after colors/copy are rebranded. The template's `tablet.json` and `mobile.json` do **not** carry `imageInfo` of their own; they inherit from `content.json`. Replace plain-text strings (e.g. `"Unleash Your Inner Power…"`). |
 | `sfdc_cms__site/<SITE>/content.json` | `title` (browser tab + share metadata), `contentBody.authenticationType`. **Strip `geoBotsAllowed` before deploy — see warning below.** |
@@ -777,7 +912,7 @@ Deploy a CSP Trusted Site for the brand CDN (one per domain):
 sf project deploy start --target-org <alias> --source-dir force-app/main/default/cspTrustedSites
 ```
 
-**Logo replacement (StaticResource — required path).** The `dxp_content_layout:siteLogo` component lives inside an LWC shadow DOM, so `styles.css` cannot reach the `<img>`. Instead, deploy the new logo as a `StaticResource` and rewrite `SiteLogo` + `_SiteLogoUrl`:
+**Logo replacement (StaticResource — required LWR path).** The `dxp_content_layout:siteLogo` component lives inside an LWC shadow DOM, so `styles.css` cannot reliably reach the `<img>`. Deploy the new logo as a `StaticResource` and rewrite `SiteLogo` + `_SiteLogoUrl` to `/sfsites/c/resource/<ResourceName>`, matching the path style used by seeded SDO Commerce bundles.
 
 ```text
 mkdir -p force-app/main/default/staticresources
@@ -796,11 +931,11 @@ sf project deploy start --target-org <alias> --source-dir force-app/main/default
 Then in `sfdc_cms__brandingSet/B2B_Commerce/content.json` (only this set carries the logo keys; the other three brandingSets `B2B_Footer`, `B2B_Home_Banner`, `B2B_Right_Panel` do not have `SiteLogo` / `_SiteLogoUrl`):
 
 ```json
-"SiteLogo": "/resource/AscendumLogo",
-"_SiteLogoUrl": "/resource/AscendumLogo"
+"SiteLogo": "/sfsites/c/resource/AscendumLogo",
+"_SiteLogoUrl": "url(/sfsites/c/resource/AscendumLogo)"
 ```
 
-Re-deploy the bundle and republish; the header swaps to the new SVG without needing CSS or external whitelisting. (Use a wide wordmark SVG — `viewBox="0 0 200 44"` shape — so it fills the header strip; the small mark-only file `Ascendum_Wordmark-05_Branco.svg` has `viewBox="0 0 140 130"` and renders as a tiny square.)
+Re-deploy the bundle and republish. Verify the published site can load `https://<site-domain>/<site-path>/sfsites/c/resource/<ResourceName>` with `content-type: image/*` or `image/svg+xml`. (Use a wide wordmark SVG — `viewBox="0 0 200 44"` shape — so it fills the header strip; the small mark-only file `Ascendum_Wordmark-05_Branco.svg` has `viewBox="0 0 140 130"` and renders as a tiny square.)
 
 **Watch the contrast.** The Cursor LWR template ships a **white header background**. If the only public version of the brand wordmark is white-on-transparent (the `_Branco` / "Blanco" variant), recolor it before deploying so it doesn’t disappear on white:
 
@@ -1040,7 +1175,7 @@ done
 
 # Z.6.b — SiteLogo points at a deployed StaticResource
 grep -E '"(SiteLogo|_SiteLogoUrl)"' force-app/main/default/digitalExperiences/site/<SITE_BUNDLE>/sfdc_cms__brandingSet/B2B_Commerce/content.json
-# Expect: "/resource/<ResourceName>" — never "assets/images/<stock>" and never an external URL
+# Expect: "/sfsites/c/resource/<ResourceName>" and "url(/sfsites/c/resource/<ResourceName>)" — never "assets/images/<stock>", never "/resource/<ResourceName>", and never an external URL
 
 # Z.6.c — Both home banner imageInfo URLs replaced (NOT the stock template URLs)
 grep -E 'home-banner-2|homeBanner-right' force-app/main/default/digitalExperiences/site/<SITE_BUNDLE>/sfdc_cms__view/home/content.json

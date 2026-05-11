@@ -89,7 +89,7 @@ metadata/
   "packageDirectories": [{ "path": "force-app", "default": true }],
   "namespace": "",
   "sfdcLoginUrl": "https://login.salesforce.com",
-  "sourceApiVersion": "62.0"
+  "sourceApiVersion": "66.0"
 }
 ```
 
@@ -128,7 +128,7 @@ metadata/
     <members>Wikimedia_Commons</members>
     <name>CspTrustedSite</name>
   </types>
-  <version>62.0</version>
+  <version>66.0</version>
 </Package>
 ```
 
@@ -156,7 +156,69 @@ The Id returned here is the **CustomField Id** (`00N...`) — you need it for St
 
 ## Step 3b — Grant FLS on the new custom fields
 
-After deploying the custom fields (Step 3), add them to the Commerce permission sets. **Two complementary paths, do both**:
+> **⚠️ Critical correction (2026-05-08, validated against `DentaidNew` SDO)**: Path A + Path B as documented below give 5–8 permsets of FLS coverage. **This is NOT enough.** The Commerce import job runs under multiple permset chains (Cart Upload, Order Builder, Community, Customer Community Plus, Guest Browser, D2C Guest, plus several SDO-specific ones), and missing ANY of them produces `'<Field>__c' isn't a valid field for Product Attribute` even though FLS appears configured. The fix that actually works is **Path C — Mirror Coverage Of A Pre-Seeded Field** (see below). Run Path A + Path B + Path C together for full coverage; do not skip Path C.
+
+### Paths A + B + C — apply all three:
+
+**Path A — Deploy a custom PermissionSet** (covers your admin user, deterministic via metadata).
+
+**Path B — Insert FieldPermissions into the 3 critical Commerce permsets** (`B2B_Commerce_Cart_Upload`, `B2B_Commerce_Order_Builder`, `B2BCommerce_Community_Access`).
+
+**Path C — Mirror Size__c coverage via Apex bulk insert** (the part that actually unblocks the importer):
+
+```apex
+// Mirror the FLS coverage of a pre-seeded ProductAttribute field onto the new ones.
+// Size__c is the canonical reference — it ships with FLS on ~16 permsets in B2B Commerce
+// Enhanced SDOs, including several SDO-internal permsets you cannot enumerate up-front.
+List<String> newFields = new List<String>{
+    'ProductAttribute.<Field1>__c',
+    'ProductAttribute.<Field2>__c'
+    // ... your custom fields
+};
+
+Set<Id> referencePermsets = new Set<Id>();
+for (FieldPermissions fp : [
+    SELECT ParentId FROM FieldPermissions
+    WHERE Field = 'ProductAttribute.Size__c' AND PermissionsRead = true
+]) {
+    referencePermsets.add(fp.ParentId);
+}
+
+Map<String, Set<Id>> existing = new Map<String, Set<Id>>();
+for (String f : newFields) existing.put(f, new Set<Id>());
+for (FieldPermissions fp : [SELECT Field, ParentId FROM FieldPermissions WHERE Field IN :newFields]) {
+    existing.get(fp.Field).add(fp.ParentId);
+}
+
+List<FieldPermissions> toInsert = new List<FieldPermissions>();
+for (String f : newFields) {
+    for (Id psId : referencePermsets) {
+        if (!existing.get(f).contains(psId)) {
+            toInsert.add(new FieldPermissions(
+                ParentId = psId,
+                SObjectType = 'ProductAttribute',
+                Field = f,
+                PermissionsRead = true,
+                PermissionsEdit = true
+            ));
+        }
+    }
+}
+
+Database.insert(toInsert, false);  // allOrNone=false to skip duplicates
+System.debug('Mirrored FLS to ' + toInsert.size() + ' (permset × field) combos');
+```
+
+**Why it works**: the importer's runtime user inherits permissions through one of those pre-seeded permsets. By mirroring `Size__c` you guarantee the same chain. Verify post-run with:
+
+```bash
+sf data query --target-org <alias> \
+  --query "SELECT Field, COUNT(Id) cnt FROM FieldPermissions WHERE Field IN ('ProductAttribute.<Field1>__c','ProductAttribute.<Field2>__c') AND PermissionsRead = true GROUP BY Field" 
+```
+
+Each field should report **the same count as `Size__c`** (typically 16 in B2B Commerce Enhanced SDOs). Lower counts → reimport will fail.
+
+### Original Path A docs (for context):
 
 ### Path A — Deploy a PermissionSet
 

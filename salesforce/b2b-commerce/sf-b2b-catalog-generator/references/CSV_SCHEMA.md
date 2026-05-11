@@ -38,6 +38,17 @@ The catalog CSV uses a superset of Salesforce's Advanced Commerce Import format.
 | 30 | `Media Attachment Url 2` | Reserved for attachments |
 | 31 | `Media Attachment Url 3` | Reserved for attachments |
 
+## Header names are strict
+
+The Advanced Import rejects near-miss headers. These names have been validated in SDO B2B Commerce Enhanced orgs:
+
+- `Product Description` is valid; `Description` is rejected.
+- `Media Standard AltText 1` is valid; `Media Standard Alt Text 1` is rejected.
+- `Media Listing AltText 1` is valid; keep it paired with `Media Listing Url 1`.
+- `Media Standard Url 1..5`, `Media Listing Url 1`, and `Media Attachment Url 1..3` use `Url`, not `URL`.
+
+If the API returns `Header '<name>' is invalid`, rewrite the CSV to this schema exactly and re-upload a new `ContentVersion`. Re-import is idempotent for already-created rows.
+
 ## Media column → ElectronicMediaGroup mapping (validated 2026-04-23)
 
 The importer inspects the column name prefix `Media <UsageType> Url N` and assigns the image to the matching `ElectronicMediaGroup.UsageType`. UsageTypes supported by B2B Commerce:
@@ -97,6 +108,43 @@ if row.get("Variation Parent (StockKeepingUnit)"):
     row["Category 1"] = row["Category 2"] = row["Category 3"] = ""
 ```
 
+## SKU naming convention
+
+Adopt a deterministic, hierarchical pattern so SKUs are sortable, greppable, and tell you the parent/variant relationship at a glance:
+
+```
+[BRAND]-[CATEGORY]-[PRODUCT]-[VARIANT?]
+```
+
+- `[BRAND]` — short brand or family code, 3–4 chars (e.g. `BFG`, `VCE`, `VAL`).
+- `[CATEGORY]` — short category code, 3–6 chars (e.g. `FERT`, `MEDIA`, `CONT`, `SEED`, `EXC` for excavator).
+- `[PRODUCT]` — short product family identifier, free-form alphanumeric (e.g. `202020`, `PROMIXHP`, `EC220E`).
+- `[VARIANT]` — only on variation children, encodes the variant axes joined by `-` (e.g. `1LB`, `5G-BLK`, `T235-HT`).
+
+### Examples
+
+| SKU | Decodes to |
+|---|---|
+| `BFG-FERT-202020` | BFG Supply, Fertilizer family, 20-20-20 — **VariationParent**, never purchased |
+| `BFG-FERT-202020-1LB` | …same family, 1 lb variant |
+| `BFG-FERT-202020-50LB` | …same family, 50 lb variant |
+| `BFG-CONT-ROUND-5G-BLK` | Round nursery container, 5 gallon, black — two-axis variant |
+| `VCE-EC220E` | Volvo CE Excavator EC220E — Simple product (no variations) |
+| `VAL-T-SERIES` | Valtra T Series tractor — VariationParent |
+| `VAL-T-235-HT` | …Valtra T 235 HP HiTech variant |
+
+### Rules
+
+- **Uppercase + dashes only.** No spaces, no underscores, no special chars. SKU goes into URLs (`/products/<sku>`) so keep it URL-safe.
+- **Parent SKU = first three segments**; variant SKUs append a `-[VARIANT]` suffix to the parent. This makes `BaseSKU` introspectable: a child's `BaseSKU` always equals its parent's full SKU.
+- **Length budget**: keep SKUs ≤ 30 chars where possible — the storefront SKU column is narrow.
+- **Don't encode price tier or buyer group** in the SKU — those are pricebook concerns, not product identity.
+- **Variant suffix is human-readable**, not a hash: `-1LB` over `-V01`. Demos sell on legibility.
+
+### When deviating
+
+If the user provides their own SKU scheme (e.g., already has SAP article numbers `100022345`), respect it — set `StockKeepingUnit` to their value but still derive `BaseSKU` for the parent grouping logic. Don't auto-rewrite real SKUs.
+
 ## Currency header convention
 
 When currency ≠ USD, rename the three price columns:
@@ -108,6 +156,29 @@ All three columns must share the same currency suffix.
 
 If the user requests `Special Pricing`, insert it between `Price (original)` and `Price (VIP Pricing)`:
 - `Price (sale)`, `Price (original)`, `Price (Special Pricing)`, `Price (VIP Pricing)` — all in the same currency.
+
+## Pricing rule for variation parents
+
+**VariationParent rows must carry a normal/realistic price**, NOT a `0.01` placeholder. Use the price of the cheapest variant, or a representative "from" price.
+
+Why this rule changed (2026-05-11, Dentaid demo):
+- Setting parents to `0.01` made the PLP show literal `0,01 €` in every variation parent card — broken UX, looks like the storefront is giving products away free.
+- The stock LWR `productCard` does NOT auto-detect `VariationParent` and show "From $X" using the cheapest variant. Parents render their own `PricebookEntry.UnitPrice` literally.
+- Pricing engine still requires a `PricebookEntry` per product, so parents need a row — just with a sensible value.
+
+Convention used by this skill:
+
+| Row type | `Price (sale)` | `Price (original)` | `Price (VIP Pricing)` |
+|---|---|---|---|
+| Simple product | real | real | real |
+| VariationParent | cheapest variant price (or representative "from" price) | cheapest variant list price | cheapest variant VIP price |
+| Variation child | real | real | real |
+
+The Advanced Import creates `PricebookEntry` rows from these columns. After the import, the orchestrator (or `sf-b2b-store-generator` Phase I) inserts `PricebookEntry` rows for the buyer-group pricebooks (List/Sale/VIP) using the same convention.
+
+**Implementation hint for build script**: when generating the parent row, compute `min(child_prices)` per pricebook and use that. If the user supplies a price file with parents at `0.01`, override them to the cheapest variant's price and note the change in the Step 7 summary.
+
+**Do NOT use `0.01` for parents.** This is a deprecated rule — old catalogs that still have it should be reimported with corrected parent prices.
 
 ## Quoting rules (CSV output)
 
