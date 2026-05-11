@@ -961,6 +961,64 @@ curl -sI -A "Mozilla/5.0" "<image_url>" | head -5
 
 Fallback only if the asset host cannot be whitelisted **and** static resource isn’t practical: embed an SVG via `content: url("data:image/svg+xml;base64,<BASE64>")` — but this only works for elements outside shadow DOM.
 
+**Buyer-group-specific banner variants (validated with B2B Commerce LWR).** When Standard and VIP/Silver buyer groups need different home experiences, create the variants directly in `sfdc_cms__view/home/content.json` and deploy the bundle. This mirrors Experience Builder's **User > Commerce > Buyer Groups contains ...** rule.
+
+Implementation pattern:
+
+1. Deep-copy the target component tree (usually the first `dxp_content_layout:banner` on the home page).
+2. Generate fresh UUIDs for every copied `id` so the cloned banner is a distinct component tree.
+3. Change the cloned banner's `imageInfo`, text blocks, button labels, and colors for the VIP/Silver experience.
+4. Add `contentOperations.operations` rules:
+
+```json
+{
+  "targetId": "<VIP_BANNER_COMPONENT_ID>",
+  "isHiddenOnOperationSuccess": false,
+  "isActive": true,
+  "rule": {
+    "name": "<UUID>",
+    "description": "Show VIP banner for VIP Customers Buyer Group",
+    "criteriaType": "AllCriteriaMatch",
+    "expressionCriteria": [{
+      "resource": "User.Commerce.BuyerGroups",
+      "operator": "Contains",
+      "value": "<VIP_OR_SILVER_BUYER_GROUP_NAME>",
+      "criterionNumber": 1
+    }]
+  }
+}
+```
+
+```json
+{
+  "targetId": "<DEFAULT_BANNER_COMPONENT_ID>",
+  "isHiddenOnOperationSuccess": true,
+  "isActive": true,
+  "rule": {
+    "name": "<UUID>",
+    "description": "Hide default banner for VIP Customers Buyer Group",
+    "criteriaType": "AllCriteriaMatch",
+    "expressionCriteria": [{
+      "resource": "User.Commerce.BuyerGroups",
+      "operator": "Contains",
+      "value": "<VIP_OR_SILVER_BUYER_GROUP_NAME>",
+      "criterionNumber": 1
+    }]
+  }
+}
+```
+
+Deploy and publish after editing:
+
+```text
+sf project deploy start --target-org <alias> --source-dir force-app/main/default/digitalExperiences/site/<SITE_BUNDLE> --wait 20
+sf community publish --name '<Site Name>' --target-org <alias>
+```
+
+Validation: log in with one buyer account that belongs only to the VIP/Silver group and one buyer account that belongs only to the Standard group. Accounts in both groups will match the VIP/Silver rule and see the VIP/Silver variant.
+
+**Important:** do not use `User.AccountId`, `User.ProfileId`, `User.UserType`, or custom `User`/`Contact` fields for Commerce buyer-group visibility. B2B Commerce LWR deploy validation rejects those expressions with `Enter a valid expression`. The working metadata path is exactly `User.Commerce.BuyerGroups` + `Contains` + the buyer group name.
+
 **Brand-color override pattern** (Ascendum example: `#003846` brand blue, `#E31D1A` accent red):
 
 ```css

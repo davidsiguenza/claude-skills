@@ -131,6 +131,7 @@ Reuse the implementation details from `sf-b2b-store-generator` **Phase F2 — Br
    - `styles.css` DXP variables and button/link colors.
    - Home hero copy, button labels, browser title, login/register/forgot-password logo references, testimonial/product-card text, and all visible home text that mentions Cirrus, solar, energy, batteries, wind, charging, or other seeded demo concepts.
    - Home hero, category, and right-panel banner images via `imageInfo.url`, with meaningful alt text and working image URLs from the client/catalog image set. Never leave the stock SDO/Cirrus image URLs in a Path C demo.
+   - Buyer-group-specific home content when the demo has Standard vs Silver/VIP buyer groups: duplicate the target component tree in `sfdc_cms__view/home/content.json` and use `contentOperations.operations` rules with `resource: "User.Commerce.BuyerGroups"`, `operator: "Contains"`, and `value: "<Buyer Group Name>"`. This is the validated CLI-deployable equivalent of Experience Builder's **User > Commerce > Buyer Groups contains ...** visibility rule.
    - Navigation labels only when they are clearly brand-facing text and do not break category navigation.
 5. **Strip deploy blockers from retrieved bundles**:
    - Remove `geoBotsAllowed` from the site JSON before deploy.
@@ -138,6 +139,64 @@ Reuse the implementation details from `sf-b2b-store-generator` **Phase F2 — Br
 6. **Do not change operational store wiring**: no pricebook restructuring, no shipping/tax/payment changes, no new buyer users, no WebStore ownership changes, and no destructive cleanup of seeded records.
 7. **Repair only missing seeded buyer access that blocks the standard persona**. If `Omega, Inc.` is not a member of `Cirrus Buyer Group`, insert that `BuyerGroupMember` after explicit user confirmation. This preserves the seeded persona while making standard Cirrus pricing work.
 8. Publish after deploy and verify the home page visually in an incognito window before considering Path C branding complete. At minimum verify: logo, primary colors, hero copy, major home cards, and login/register logo no longer show Cirrus. Also probe `https://<site-domain>/<site-path>/sfsites/c/resource/<ResourceName>` and confirm it returns the expected image content type.
+
+### Buyer group home variants (validated 2026-05-11)
+
+To make Standard and Silver/VIP buyers see different home hero content without clicking through Experience Builder, edit the retrieved `DigitalExperienceBundle` directly:
+
+1. In `sfdc_cms__view/home/content.json`, find the component to personalize (for example the first `dxp_content_layout:banner` under the home content region).
+2. Deep-copy that component tree, generate fresh UUIDs for every `id`, and change its text/image/button attributes for the Silver/VIP experience.
+3. Insert the personalized component next to the default component.
+4. Add two `contentOperations.operations` entries:
+
+   ```json
+   {
+     "targetId": "<SILVER_BANNER_COMPONENT_ID>",
+     "isHiddenOnOperationSuccess": false,
+     "isActive": true,
+     "rule": {
+       "name": "<UUID>",
+       "description": "Show Silver banner for Cirrus Silver Buyer Group",
+       "criteriaType": "AllCriteriaMatch",
+       "expressionCriteria": [{
+         "resource": "User.Commerce.BuyerGroups",
+         "operator": "Contains",
+         "value": "Cirrus Silver Buyer Group",
+         "criterionNumber": 1
+       }]
+     }
+   }
+   ```
+
+   ```json
+   {
+     "targetId": "<DEFAULT_BANNER_COMPONENT_ID>",
+     "isHiddenOnOperationSuccess": true,
+     "isActive": true,
+     "rule": {
+       "name": "<UUID>",
+       "description": "Hide default banner for Cirrus Silver Buyer Group",
+       "criteriaType": "AllCriteriaMatch",
+       "expressionCriteria": [{
+         "resource": "User.Commerce.BuyerGroups",
+         "operator": "Contains",
+         "value": "Cirrus Silver Buyer Group",
+         "criterionNumber": 1
+       }]
+     }
+   }
+   ```
+
+5. Deploy the site bundle and publish:
+
+   ```bash
+   sf project deploy start --target-org <alias> --source-dir force-app/main/default/digitalExperiences/site/<SITE_BUNDLE> --wait 20
+   sf community publish --name '<Site Name>' --target-org <alias>
+   ```
+
+6. Validate with one buyer account that is **only** in the Silver/VIP group and one buyer account that is **only** in the normal group. Do not use accounts that belong to both groups for this validation; they will match the Silver/VIP rule.
+
+**Do not use** `User.AccountId`, `User.ProfileId`, `User.UserType`, or custom `User`/`Contact` fields for this rule. Those expressions deploy-fail in B2B Commerce LWR with `Enter a valid expression`. The validated metadata resource is exactly `User.Commerce.BuyerGroups` with `Contains` and the buyer group name.
 
 ## Seeded catalog cleanup after Path B/C import
 
