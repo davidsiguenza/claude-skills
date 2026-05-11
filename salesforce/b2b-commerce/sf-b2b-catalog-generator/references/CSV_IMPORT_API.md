@@ -16,7 +16,7 @@ Live validation against `DentaidNew` SDO surfaced several corrections to earlier
 
 3. **CommerceEntitlementProduct rows ARE created by the importer** (1 per product). Earlier `demo-builder` Phase Bridge claimed the importer didn't create them and recommended a manual post-step. False — the importer creates them. Skip the manual post-step.
 
-4. **FLS Path A + Path B as documented IS NOT SUFFICIENT.** Insert into `B2B_Commerce_Cart_Upload + Order_Builder + Community_Access` (3 permsets) gives 5-8 permsets coverage; the importer still fails with `'X__c' isn't a valid field for Product Attribute`. **Mandatory fix: mirror the EXACT permset coverage of a pre-seeded field like `Size__c`** (16 permsets in tested SDO). See VARIATIONS_METADATA.md "FLS coverage mirror" section.
+4. **FLS Path A + Path B as documented IS NOT SUFFICIENT.** Insert into `B2B_Commerce_Cart_Upload + Order_Builder + Community_Access` (3 permsets) gives 5-8 permsets coverage; the importer can still fail variation child rows with `'X__c' isn't a valid field for Product Attribute`. **Mandatory fix: mirror the EXACT permset coverage of a pre-seeded field like `Size__c`** (16 permsets in tested SDO). See VARIATIONS_METADATA.md "FLS coverage mirror" section. If the first import partially succeeds before FLS is fixed, keep the partial successes, mirror FLS, then upload the same CSV again and re-import; Advanced Import upserts the already-created parent/simple rows and completes the failed children.
 
 5. **Multipart upload for ContentVersion FAILS** in standard SDOs — `entity_content` returns `INVALID_FIELD`, two binary parts return `Cannot include more than one binary part`. Use **Variant B (base64 in JSON body)** — Variant A (curl multipart) doesn't work in these orgs.
 
@@ -41,7 +41,7 @@ Live validation against `DentaidNew` SDO surfaced several corrections to earlier
    ```
    Resolve `cmsWorkspaceId` with: `sf data query -q "SELECT Id FROM ManagedContentSpace WHERE Name LIKE '<Site Name>%'"` — the site's Managed Content Space is auto-created by Phase A.
 
-7. **`Failed` is NOT terminal-bad — re-import works as upsert.** A first-run Failed with partial successes does NOT prevent a subsequent re-import from completing the missing rows. The 12 successes from run 1 persisted, run 2 (after FLS fix) added the 19 children that had failed and reported `productsUpdated: 12, productsCreated: 19`. Idempotency confirmed.
+7. **`Failed` is NOT terminal-bad — re-import works as upsert.** A first-run Failed with partial successes does NOT prevent a subsequent re-import from completing the missing rows. The 12 successes from run 1 persisted, run 2 (after FLS fix) added the 19 children that had failed and reported `productsUpdated: 12, productsCreated: 19`. Revalidated 2026-05-11 on the Dentaid seeded-SDO demo: first run loaded 21/40 rows and failed 19 variation children on FLS; after mirroring `Size__c` FLS, re-import finished 40/40 with `productsUpdated: 40` and `pricebookEntriesUpdated: 120`. Idempotency confirmed.
 
 8. **Search index requires 5 min cooldown between rebuilds** — `B2B_SEARCH_ADMIN_ERROR — You updated the search index too soon. Wait at least 5 minutes between full index updates.` Plan the post-import rebuild accordingly.
 

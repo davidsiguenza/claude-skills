@@ -218,6 +218,10 @@ sf data query --target-org <alias> \
 
 Each field should report **the same count as `Size__c`** (typically 16 in B2B Commerce Enhanced SDOs). Lower counts → reimport will fail.
 
+**Partial import recovery (validated 2026-05-11, Dentaid seeded SDO).** If you forgot full FLS coverage and the import fails only on variation children with `'<Field>__c' isn't a valid field for Product Attribute`, do not delete the partial import. The parent and simple rows are usually valid. Mirror the `Size__c` FLS coverage, wait for any permission set group recalculation to finish, then upload the same corrected CSV as a new `ContentVersion` and start a new import job. Advanced Import upserts existing parents/simples and creates the missing children/`ProductAttribute` rows.
+
+**Permission set group gotcha.** Some SDO permission sets are managed through permission set groups. Direct `FieldPermissions` inserts can temporarily fail with messages such as `The <Permission Set Group> permission set group is updating` or permanently fail with `You can’t create, edit, or delete this record because its parent is associated with a permission set group`. Use `Database.insert(..., false)` or a retry loop; skipped managed/group-owned rows are acceptable when enough editable mirrored rows are created and the re-import succeeds.
+
 ### Original Path A docs (for context):
 
 ### Path A — Deploy a PermissionSet
