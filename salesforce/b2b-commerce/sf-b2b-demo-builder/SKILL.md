@@ -1,19 +1,21 @@
 ---
 name: sf-b2b-demo-builder
 description: >-
-  Top-level entry point ("package skill") for building Salesforce B2B Commerce demos on an SDO / sandbox / DX org. Routes between three modes: full new store from zero, strict catalog build on the seeded SDO B2B Commerce store, or a hybrid branded demo that reuses the seeded SDO store while applying client visual branding and a client-specific catalog. Use whenever the user says things like "create a B2B Commerce demo", "set up a complete B2B store with products", "I need a new commerce demo", "build me a B2B demo for client X", "use the existing SDO B2B store", "quick B2B demo", or "brand the existing B2B site".
+  Top-level router for Salesforce B2B Commerce demos. Use whenever the user says things like "create a B2B Commerce demo", "set up a complete B2B store with products", "I need a new commerce demo", "build me a B2B demo for client X", "use the existing SDO B2B store", "quick B2B demo", or "brand the existing B2B site". Routes to either full new-store build or the recommended seeded SDO branded demo.
 ---
 
 # Salesforce B2B Commerce Demo Builder — Package Skill
 
-This skill is the **entry point** for building a B2B Commerce demo end-to-end. It routes between the storefront and catalog child skills, and shares context between them so the user only answers each preflight question once.
+This skill is the **entry point** for B2B Commerce demos. Keep it lightweight: choose the path, then hand off to the appropriate child skill.
 
 ## Children
 
 | Child skill | Folder | Owns |
 |---|---|---|
-| **`sf-b2b-store-generator`** | `.cursor/skills/sf-b2b-store-generator/` | Experience Cloud site (LWR), WebStore, empty `ProductCatalog`, 3 custom pricebooks (List/Sale/VIP), entitlement policy, Standard + VIP buyer groups + accounts + contacts + users, shipping profiles, tax/checkout/payment alignment with the SDO reference store, guest browsing, branding (logo via StaticResource using `/sfsites/c/resource/<ResourceName>`, color tokens on all brandingSets, hero/banner images with CSP Trusted Site, hero copy, navigation), search index. **Stops at "store is publishable but empty".** |
-| **`sf-b2b-catalog-generator`** | `.cursor/skills/sf-b2b-catalog-generator/` | Catalog plan tailored to a customer/industry, web research, image sourcing (Wikimedia + vendor domains via `CspTrustedSite`), variation attributes (`ProductAttribute` picklist fields + `ProductAttributeSet` + `ProductAttributeSetItem`), final CSV ready for B2B Commerce Advanced Import (`b2bCatalog/<Customer>/<Customer>.csv`) plus org metadata for variations. **Stops at "CSV + variation metadata ready"; the user runs the Advanced Import in the Setup UI.** |
+| **`sf-b2b-seeded-sdo-demo`** | `.cursor/skills/sf-b2b-seeded-sdo-demo/` | Recommended path. Reuses `SDO - B2B Commerce Enhanced`, applies customer branding, imports a customer catalog, cleans seeded catalog surface, configures buyer-group home variants, and validates Standard/Silver buyer experiences. |
+| **`sf-b2b-store-generator`** | `.cursor/skills/sf-b2b-store-generator/` | Full build from zero. Creates a new Experience site + WebStore + catalog scaffold + buyer groups + pricebooks + checkout/tax/payment/shipping/login setup. Use only when a truly separate new store is required. |
+| **`sf-b2b-catalog-generator`** | `.cursor/skills/sf-b2b-catalog-generator/` | Catalog generation and CSV/import metadata patterns. Used by both paths. |
+| **`sf-b2b-shared`** | `.cursor/skills/sf-b2b-shared/` | Shared references, currently DigitalExperienceBundle branding patterns. |
 
 > Both children also work standalone if invoked directly. This skill is the preferred entry point when the user's intent covers more than one of those scopes — or when they're not sure where to start.
 
@@ -27,13 +29,9 @@ This skill is the **entry point** for building a B2B Commerce demo end-to-end. I
 
 Echo the choice back ("OK, going with option 3 — hybrid branded seeded SDO demo for client X") so the user can correct before any work starts.
 
-**Do not offer the old option 2 in the user-facing question.** The strict seeded SDO catalog-only path is retained below as a reference/deprecated internal route, but the recommended workflow for customer demos is option 3.
-
 ## Routing logic
 
 ### Path A — Full new storefront + optional catalog (option 1)
-
-This is the original full-build mode.
 
 **Current status / caveat:** Path A is not the recommended default because checkout can fail on shipping setup/alignment in freshly created stores. Until the shipping workflow is revalidated end-to-end, prefer Path C for demos that need to be presentable quickly.
 
@@ -41,203 +39,9 @@ This is the original full-build mode.
 2. Do **not** run that skill's Phase I directly. If the user wants products after the store is ready, run `sf-b2b-catalog-generator` using the **Phase Bridge — context handoff** below, then run **Phase Bridge — post-import**.
 3. Hand back the public URL, buyer credentials, validation plan, and whether the catalog was loaded.
 
-### Path B — Strict seeded SDO catalog demo (deprecated reference only)
-
-This path follows the BFG Supply / B2B Commerce Demo Builder pattern: reuse the seeded SDO B2B store and create only catalog-facing demo data. It is kept for historical/reference purposes only. **Do not offer it as a normal user option.** For customer-facing demos, use Path C so the site is visually branded and the old seeded catalog is cleaned up.
-
-If explicitly requested by a maintainer, this path means: **do not rebrand the home page. Do not create a new WebStore. Do not create buyer groups, pricebooks, shipping, tax, payment, or buyer users unless validation proves the seeded store is missing required data.**
-
-1. Read `sf-b2b-catalog-generator/SKILL.md`, `sf-b2b-catalog-generator/references/SDO_DEMO_PERSONA.md`, and, when useful, the user's BFG/B2B Demo Builder reference docs.
-2. Pick the target org via the catalog skill's Step 2b (`sf org list --json`) and explicit user confirmation.
-3. Resolve the seeded SDO context with **Seeded SDO context resolution** below.
-4. Confirm the resolved defaults with the user. Ask only for catalog-specific inputs: company/industry or product theme, product count, language, image hosting strategy, price range/tone, target currency if the seeded pricebooks do not reveal one, and whether to include Wikimedia/vendor domains.
-5. Run `sf-b2b-catalog-generator` with the seeded context:
-   - Entitlement default: `Cirrus Entitlement Policy`.
-   - Pricebook aliases: `original` → org Standard Price Book, `sale` → `Cirrus Price Book`, `VIP Pricing` → `Cirrus Silver Price Book`.
-   - Buyer validation persona: Lauren Bailey / Omega Inc.
-   - CMS workspace: the resolved Commerce workspace, so the import job can create `ProductMedia`.
-6. Run **Phase Bridge — post-import**.
-7. Validate the demo using `DEMO_SCENARIOS.md`: variant selector, faceted filtering, buyer-specific pricing, reorder where applicable, images, and search.
-
 ### Path C — Hybrid seeded SDO branded catalog demo (option 3)
 
-This is the "best of both worlds" path: reuse the seeded SDO B2B store, buyer groups, pricebooks, entitlement, payment/tax/shipping, and users, but apply client visual branding and load a client-specific catalog. It should feel like a customer demo without paying the setup cost of a new store.
-
-1. Read `sf-b2b-catalog-generator/SKILL.md`, `sf-b2b-catalog-generator/references/SDO_DEMO_PERSONA.md`, and `sf-b2b-store-generator/SKILL.md` **Phase F2 — Branding**.
-2. Pick the target org via `sf org list --json` and explicit user confirmation.
-3. Ask for the client/company URL. Client research is mandatory in this path because it feeds both branding and catalog generation.
-4. Resolve the seeded SDO context with **Seeded SDO context resolution** below.
-5. Apply **Visual branding on the existing SDO store** below. This is mandatory for Path C; do not continue with a "branded" demo while the home page, logo, colors, or login screens still show Cirrus.
-6. Run `sf-b2b-catalog-generator` with the same seeded context and the client research gathered for branding.
-7. Run **Phase Bridge — post-import**.
-8. Run **Seeded catalog cleanup after Path B/C import** below so the storefront catalog and navigation show only the new client catalog plus `All Products`, not the original Cirrus/Solar seeded categories.
-9. Validate both the storefront visual branding and the catalog buyer flows.
-
-## Seeded SDO context resolution (shared by Path B and Path C)
-
-Resolve with live SOQL, using names as hints but always trusting IDs from the target org:
-
-```bash
-sf data query -q "SELECT Id, Name, Type, DefaultLanguage, SupportedCurrencies FROM WebStore WHERE Name = 'SDO - B2B Commerce Enhanced' OR Type = 'B2B' ORDER BY Name" -o <alias>
-sf data query -q "SELECT ProductCatalogId, ProductCatalog.Name, SalesStoreId FROM WebStoreCatalog WHERE SalesStoreId = '<WEBSTORE_ID>'" -o <alias>
-sf data query -q "SELECT Id, Name FROM CommerceEntitlementPolicy WHERE Name = 'Cirrus Entitlement Policy'" -o <alias>
-sf data query -q "SELECT Id, Name, IsStandard, CurrencyIsoCode FROM Pricebook2 WHERE IsStandard = true OR Name IN ('Cirrus Price Book','Cirrus Silver Price Book')" -o <alias>
-sf data query -q "SELECT Id, Name FROM ManagedContentSpace WHERE Name LIKE '%Commerce%' OR Name LIKE '%SDO%' ORDER BY Name" -o <alias>
-sf data query -q "SELECT Id, Name FROM Account WHERE Name = 'Omega, Inc.'" -o <alias>
-sf data query -q "SELECT BuyerGroup.Name, BuyerGroupId FROM BuyerGroupMember WHERE Buyer.Name = 'Omega, Inc.'" -o <alias>
-```
-
-Build an in-memory context manifest. If useful for repeatability, persist it as `branding-work/sdo-b2b-commerce-enhanced/store-ids.json`; otherwise keep it in session. Minimum shape:
-
-```text
-{
-  "org": {"alias": "<alias>"},
-  "siteName": "SDO - B2B Commerce Enhanced",
-  "webStoreId": "<WEBSTORE_ID>",
-  "catalog": {
-    "productCatalogId": "<CATALOG_ID>",
-    "entitlementPolicyId": "<CIRRUS_POLICY_ID>",
-    "entitlementPolicyName": "Cirrus Entitlement Policy"
-  },
-  "pricebooks": {
-    "standard": "<STANDARD_PB_ID>",
-    "sale": "<CIRRUS_PRICE_BOOK_ID>",
-    "vip": "<CIRRUS_SILVER_PRICE_BOOK_ID>"
-  },
-  "cmsWorkspaceId": "<MANAGED_CONTENT_SPACE_ID>",
-  "seededPersona": {
-    "account": "Omega, Inc.",
-    "contact": "Lauren Bailey",
-    "entitlement": "Cirrus Entitlement Policy"
-  }
-}
-```
-
-If any required seeded record is missing, stop and report the missing prerequisite. Do not silently create a replacement unless the user explicitly chooses to repair the seeded store.
-
-## Visual branding on the existing SDO store (Path C only)
-
-Reuse the implementation details from `sf-b2b-store-generator` **Phase F2 — Branding**, but apply these extra safety rules because Path C modifies an existing shared SDO site:
-
-1. **Retrieve only the seeded store bundle**. Discover the exact `DigitalExperienceBundle` name for `SDO - B2B Commerce Enhanced`; do not deploy every bundle in the workspace.
-2. **Create a local backup before editing** under `branding-work/sdo-b2b-commerce-enhanced/backups/<timestamp>/`.
-3. **Deploy only targeted metadata**:
-   - The specific `DigitalExperienceBundle` folder for the seeded store.
-   - Any required brand `StaticResource` for the logo.
-   - Any required `CspTrustedSite` for logo / hero / banner image domains.
-4. **Apply the maximum safe visual branding**:
-   - Logo through `StaticResource` and `SiteLogo` / `_SiteLogoUrl` using the LWR-safe published path `/sfsites/c/resource/<ResourceName>` and `url(/sfsites/c/resource/<ResourceName>)`. Do not use the shorter `/resource/<ResourceName>` path for Commerce LWR branding; it may return `200` but still not render in the header.
-   - Color tokens on **every branding set present in the retrieved bundle**, not just the common four. Seeded SDO B2B stores may include `Home_Header` in addition to `B2B_Commerce`, `B2B_Footer`, `B2B_Home_Banner`, and `B2B_Right_Panel`.
-   - `styles.css` DXP variables and button/link colors.
-   - Home hero copy, button labels, browser title, login/register/forgot-password logo references, testimonial/product-card text, parallax text, and all visible home text that mentions Cirrus, solar, energy, batteries, wind, charging, emergency prep, nature energy, or other seeded demo concepts.
-   - Home hero, category/product banners, and right-panel banner images via `imageInfo.url`, with meaningful alt text and working image URLs from the client/catalog image set. Never leave stock SDO/Cirrus images such as `emergency-prep-b2b.jpg` in a Path C demo.
-   - Custom home components, especially `c:parallaxcmp`: replace stock titles such as `Discover Nature's Energy` with brand-appropriate CSR/sustainability copy (for example `Committed to Sustainable Oral Health` for Dentaid).
-   - Buyer-group-specific home content when the demo has Standard vs Silver/VIP buyer groups: duplicate the target component tree in `sfdc_cms__view/home/content.json` and use `contentOperations.operations` rules with `resource: "User.Commerce.BuyerGroups"`, `operator: "Contains"`, and `value: "<Buyer Group Name>"`. This is the validated CLI-deployable equivalent of Experience Builder's **User > Commerce > Buyer Groups contains ...** visibility rule.
-   - Navigation labels only when they are clearly brand-facing text and do not break category navigation.
-5. **Strip deploy blockers from retrieved bundles**:
-   - Remove `geoBotsAllowed` from the site JSON before deploy.
-   - If the retrieved SDO bundle contains generated approval/FSL routes or views that fail deploy because an object such as `FSL__Custom_Gantt_Action__c` is not installed, remove only those route/view folders from the local deploy payload. They are unrelated to the storefront catalog and can block otherwise valid branding deploys.
-6. **Do not change operational store wiring**: no pricebook restructuring, no shipping/tax/payment changes, no new buyer users, no WebStore ownership changes, and no destructive cleanup of seeded records.
-7. **Repair only missing seeded buyer access that blocks the standard persona**. If `Omega, Inc.` is not a member of `Cirrus Buyer Group`, insert that `BuyerGroupMember` after explicit user confirmation. This preserves the seeded persona while making standard Cirrus pricing work.
-8. Publish after deploy and verify the home page visually in an incognito window before considering Path C branding complete. At minimum verify: logo, primary colors, hero copy, major home cards, and login/register logo no longer show Cirrus. Also probe `https://<site-domain>/<site-path>/sfsites/c/resource/<ResourceName>` and confirm it returns the expected image content type.
-
-### Buyer group home variants (validated 2026-05-11)
-
-To make Standard and Silver/VIP buyers see different home hero content without clicking through Experience Builder, edit the retrieved `DigitalExperienceBundle` directly:
-
-1. In `sfdc_cms__view/home/content.json`, find the component to personalize (for example the first `dxp_content_layout:banner` under the home content region).
-2. Deep-copy that component tree, generate fresh UUIDs for every `id`, and change its text/image/button attributes for the Silver/VIP experience.
-3. Insert the personalized component next to the default component.
-4. Add two `contentOperations.operations` entries:
-
-   ```json
-   {
-     "targetId": "<SILVER_BANNER_COMPONENT_ID>",
-     "isHiddenOnOperationSuccess": false,
-     "isActive": true,
-     "rule": {
-       "name": "<UUID>",
-       "description": "Show Silver banner for Cirrus Silver Buyer Group",
-       "criteriaType": "AllCriteriaMatch",
-       "expressionCriteria": [{
-         "resource": "User.Commerce.BuyerGroups",
-         "operator": "Contains",
-         "value": "Cirrus Silver Buyer Group",
-         "criterionNumber": 1
-       }]
-     }
-   }
-   ```
-
-   ```json
-   {
-     "targetId": "<DEFAULT_BANNER_COMPONENT_ID>",
-     "isHiddenOnOperationSuccess": true,
-     "isActive": true,
-     "rule": {
-       "name": "<UUID>",
-       "description": "Hide default banner for Cirrus Silver Buyer Group",
-       "criteriaType": "AllCriteriaMatch",
-       "expressionCriteria": [{
-         "resource": "User.Commerce.BuyerGroups",
-         "operator": "Contains",
-         "value": "Cirrus Silver Buyer Group",
-         "criterionNumber": 1
-       }]
-     }
-   }
-   ```
-
-5. Deploy the site bundle and publish:
-
-   ```bash
-   sf project deploy start --target-org <alias> --source-dir force-app/main/default/digitalExperiences/site/<SITE_BUNDLE> --wait 20
-   sf community publish --name '<Site Name>' --target-org <alias>
-   ```
-
-6. Validate with one buyer account that is **only** in the Silver/VIP group and one buyer account that is **only** in the normal group. Do not use accounts that belong to both groups for this validation; they will match the Silver/VIP rule.
-
-**Do not use** `User.AccountId`, `User.ProfileId`, `User.UserType`, or custom `User`/`Contact` fields for this rule. Those expressions deploy-fail in B2B Commerce LWR with `Enter a valid expression`. The validated metadata resource is exactly `User.Commerce.BuyerGroups` with `Contains` and the buyer group name.
-
-## Seeded catalog cleanup after Path B/C import
-
-Path B and Path C reuse the seeded SDO B2B store, whose catalog normally contains Cirrus/Solar products and categories. After the client CSV import succeeds, clean the storefront catalog surface so the site shows the new demo only.
-
-1. **Remove old products from the catalog by deleting only `ProductCategoryProduct` links for non-demo SKUs**:
-
-   ```bash
-   sf data query -q "SELECT Id, Product.StockKeepingUnit FROM ProductCategoryProduct WHERE ProductCategory.CatalogId = '<CATALOG_ID>'" -o <alias> --json
-   ```
-
-   Filter in code: keep rows whose SKU starts with the new catalog prefix (for example `DENT-`) and delete all other `ProductCategoryProduct` rows. Do **not** delete the old `Product2` records, `PricebookEntry` rows, or `CommerceEntitlementProduct` rows unless the user explicitly asks for destructive cleanup. Removing the category links is enough to hide seeded products from the storefront catalog.
-
-2. **Verify only the new products remain catalog-visible**:
-
-   ```bash
-   sf data query -q "SELECT Id, Name, StockKeepingUnit FROM Product2 WHERE Id IN (SELECT ProductId FROM ProductCategoryProduct WHERE ProductCategory.CatalogId = '<CATALOG_ID>') ORDER BY StockKeepingUnit" -o <alias> --json
-   ```
-
-   Expected: only the new catalog prefix appears.
-
-3. **Verify every new product is linked to `All Products`**:
-
-   ```bash
-   sf data query -q "SELECT Product.StockKeepingUnit, ProductCategory.Name FROM ProductCategoryProduct WHERE ProductCategory.CatalogId = '<CATALOG_ID>' AND ProductCategory.Name = 'All Products' ORDER BY Product.StockKeepingUnit" -o <alias> --json
-   ```
-
-   Expected: one `All Products` row per imported product or variation parent that should appear in PLP navigation.
-
-4. **Remove empty seeded categories, but preserve the client category tree**:
-   - Keep `All Products`.
-   - Keep every category with a remaining `ProductCategoryProduct` row.
-   - Keep all ancestors of those used categories.
-   - Keep structural client roots such as `Brands`, `Toothpastes`, `Mouthwashes`, `Toothbrushes`, or whatever roots the CSV created.
-   - Delete empty seeded categories such as `Energy Products`, `Energy Services`, `Featured Products`, `Smart Buildings`, `Solar Solutions`, `Charging`, `Charging Accessories`, `Wind Systems`, `Batteries`, and `Warranty` when they have no remaining products.
-   - Delete child categories before parents.
-
-5. **Refresh the storefront**:
-   - Run `sf community publish --name '<Site Name>' --target-org <alias>`.
-   - Run `sf commerce search start --store-name '<Site Name>' --targetusername <alias>`, respecting the 5-minute full-index cooldown. If the command returns `You updated the search index too soon`, report that the data cleanup is complete and rerun the rebuild after the cooldown.
+Read `.cursor/skills/sf-b2b-seeded-sdo-demo/SKILL.md` and follow it end-to-end. It owns seeded context resolution, visual branding, catalog import, seeded catalog cleanup, buyer-group home variants, and validation for this path.
 
 ## Phase Bridge — context handoff (Path A full-store catalog handoff)
 
@@ -313,9 +117,9 @@ The `sf-b2b-catalog-generator` skill owns CSV generation. When a target store is
 ## Cross-references
 
 - This package skill is the **preferred** entry point for new B2B Commerce demos.
-- The two child skills also work standalone — invoke them directly if you only want one scope and you know which one.
+- Child skills also work standalone — invoke them directly if you only want one scope and you know which one.
 - After this skill finishes Path A, `branding-work/<slug>/store-ids.json` is the source of truth for the new store IDs. Treat it as the per-demo "manifest"; both children read and write to it.
-- After this skill finishes Path B or Path C, the seeded-store context manifest (if persisted) plus `b2bCatalog/<Customer>/<Customer>.csv` are the handover artifacts.
+- After this skill finishes Path C, the seeded-store context manifest (if persisted) plus `b2bCatalog/<Customer>/<Customer>.csv` are the handover artifacts.
 
 ## Maintenance rule
 

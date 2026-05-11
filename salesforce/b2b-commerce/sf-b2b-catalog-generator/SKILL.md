@@ -7,7 +7,7 @@ description: Generate custom Salesforce B2B Commerce product catalogs (CSV impor
 
 Generate a Salesforce B2B Commerce-ready product catalog as a CSV, personalized for a customer or industry, starting from minimal inputs. Outputs a file that can be loaded via B2B Commerce Advanced Import.
 
-> **Part of the `sf-b2b-demo-builder` skill package.** If the user asks for "a complete B2B demo", "store + catalog", a strict catalog build on the existing SDO B2B store, or a hybrid branded seeded-SDO demo, invoke `.cursor/skills/sf-b2b-demo-builder/SKILL.md` first. The package skill chooses between Path A (new store), Path B (strict seeded SDO catalog), and Path C (hybrid seeded SDO branding + catalog), and shares target org, store, entitlement policy, pricebooks, CMS workspace, brand profile, and image-host CSP whitelist so this skill's preflight can be skipped or pre-filled. When invoked standalone, this skill behaves as documented below — running its full preflight from scratch.
+> **Part of the `sf-b2b-demo-builder` skill package.** If the user asks for "a complete B2B demo", "store + catalog", or a hybrid branded seeded-SDO demo, invoke `.cursor/skills/sf-b2b-demo-builder/SKILL.md` first. The package skill chooses between full new-store build and the recommended `sf-b2b-seeded-sdo-demo` path, then shares target org, store, entitlement policy, pricebooks, CMS workspace, brand profile, and image-host CSP whitelist so this skill's preflight can be skipped or pre-filled. When invoked standalone, this skill behaves as documented below — running its full preflight from scratch.
 
 ## Workflow at a glance
 
@@ -32,13 +32,13 @@ Ask **four questions** at the start (in a single message, so the user can answer
 
 1. **Entitlement(s)** to associate with the products. They can provide 1 to 3 entitlement names. Example answers: `Regular Buyers`, `VIP Policy`, `Ascendum Entitlement Policy`.
 
-   **SDO shortcut**: if the catalog targets a B2B Commerce Enhanced SDO and the user has no strong preference, ask *"Use the standard SDO buyer persona (Lauren Bailey / Omega Inc., Cirrus Entitlement Policy) or create custom buyers?"*. The standard persona is pre-seeded in every B2B Commerce Enhanced SDO and saves ~30 min of buyer-group / pricebook setup. See [SDO_DEMO_PERSONA.md](references/SDO_DEMO_PERSONA.md) for the full persona definition. If `sf-b2b-demo-builder` invoked this skill with Path B or Path C, treat the SDO persona as already selected and do not re-ask; use `Cirrus Entitlement Policy`, `Cirrus Price Book`, `Cirrus Silver Price Book`, and the resolved CMS workspace. If `sf-b2b-store-generator` ran in the same session and created custom buyer groups, use those instead.
+   **SDO shortcut**: if the catalog targets a B2B Commerce Enhanced SDO and the user has no strong preference, ask *"Use the standard SDO buyer persona (Lauren Bailey / Omega Inc., Cirrus Entitlement Policy) or create custom buyers?"*. The standard persona is pre-seeded in every B2B Commerce Enhanced SDO and saves ~30 min of buyer-group / pricebook setup. See [SDO_DEMO_PERSONA.md](references/SDO_DEMO_PERSONA.md) for the full persona definition. If `sf-b2b-seeded-sdo-demo` invoked this skill, treat the SDO persona as already selected and do not re-ask; use `Cirrus Entitlement Policy`, `Cirrus Price Book`, `Cirrus Silver Price Book`, and the resolved CMS workspace. If `sf-b2b-store-generator` ran in the same session and created custom buyer groups, use those instead.
 
 2. **Company or industry** for the demo. Either:
    - Company name **+ URL** (e.g., `Ascendum — https://ascendum.pt/`), OR
    - An industry / sector (e.g., "fashion retail", "industrial chemicals", "medical devices").
 
-   **Hybrid seeded-SDO Path C**: company/client URL is mandatory because the orchestrator uses the same research for both the existing site's visual branding and this catalog. Reuse the brand profile already captured by the package skill instead of asking again.
+   **Seeded-SDO branded demo**: company/client URL is mandatory because `sf-b2b-seeded-sdo-demo` uses the same research for both the existing site's visual branding and this catalog. Reuse the brand profile already captured by the seeded-SDO skill instead of asking again.
 
 3. **Image hosting strategy** — critical to ask up-front so images are consistent and URLs are stable on day one. Offer the four options below, and if the user picks one that needs credentials/IDs (Cloudinary, Salesforce Files, GitHub raw), ask for them in the same turn. See [IMAGE_HOSTING.md](references/IMAGE_HOSTING.md) for full recipes:
    - **A. Cloudinary** (recommended when user already has a cloud account). Ask for: cloud name, API key, API secret, target folder name. URLs are `res.cloudinary.com/<cloud>/image/upload/.../<folder>/<sku>.jpg`. Requires adding `res.cloudinary.com` to Trusted URLs.
@@ -57,7 +57,7 @@ Ask **four questions** at the start (in a single message, so the user can answer
    - **Price range** to anchor to (e.g., "enterprise tier, mostly $50k+")
    - **Number of price tiers**: default is `sale`, `original`, `VIP` (3 tiers in USD). User can ask for `Special Pricing` as a 4th tier or reduce to 2.
 
-   **Seeded SDO pricebook aliases** (when invoked by package Path B or Path C): use `original` → org Standard Price Book, `sale` → `Cirrus Price Book`, and `VIP Pricing` → `Cirrus Silver Price Book`. Do not create new pricebooks for these paths.
+   **Seeded SDO pricebook aliases** (when invoked by `sf-b2b-seeded-sdo-demo`): use `original` → org Standard Price Book, `sale` → `Cirrus Price Book`, and `VIP Pricing` → `Cirrus Silver Price Book`. Do not create new pricebooks for this path.
 
 ### Step 2 — Research
 
@@ -351,7 +351,7 @@ Expected ranges (for a ~20-base-product catalog with ~5 variations):
 
 If any counter is 0 when it shouldn't be, that's the diagnosis vector — e.g. `Media = 0` → CMS workspace not linked, `Categories < 2× products` → All Products linkage missing, `Variants = 0` while CSV had variations → FLS or `ProductAttributeSetItem` missing.
 
-6. **Pricing cache sync** (only if running Path C end-to-end, after `PricebookEntry` rows are inserted by Phase Bridge post-import). The pricing engine caches aggressively — after bulk pricebook inserts, the storefront may still show "Price Unavailable" until the cache flushes. Force a sync:
+6. **Pricing cache sync** (when running a full demo flow after `PricebookEntry` rows are inserted by post-import wiring). The pricing engine caches aggressively — after bulk pricebook inserts, the storefront may still show "Price Unavailable" until the cache flushes. Force a sync:
 
 ```bash
 sf api request rest "/services/data/v66.0/connect/core-pricing/sync/syncData" --method GET --target-org <alias>

@@ -4,7 +4,7 @@
 
 > **Decision rule for the agent**: when running standalone (no storefront created in the same session), ask the user *"Use the standard SDO buyer persona (Lauren Bailey / Omega Inc.) or create custom buyers?"* — and default to the standard if the user says yes or doesn't have a strong preference. If `sf-b2b-store-generator` ran in the same session and created custom buyers, use those instead and ignore this file.
 
-> **Package skill modes**: `sf-b2b-demo-builder` uses this persona automatically for Path B (**strict seeded SDO catalog demo**) and Path C (**hybrid branded seeded SDO demo**). Path B leaves the existing store branding untouched. Path C may rebrand the existing site's visual shell, but it still uses Lauren/Omega/Cirrus for buyer access, entitlement, and pricing.
+> **Package skill mode**: `sf-b2b-seeded-sdo-demo` uses this persona automatically for the hybrid branded seeded SDO demo. The existing store can be rebranded visually, but it still uses the seeded Lauren/Omega/Cirrus setup for buyer access, entitlement, and pricing unless validation proves a repair is needed.
 
 ## The persona
 

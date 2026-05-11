@@ -8,7 +8,7 @@ description: >-
 
 Use this skill when provisioning a **new WebStore + Experience site** (template **Commerce Store (LWR)**) and wiring **catalog, pricing, buyers, shipping profiles, tax, and guest browsing**, using **`SDO - B2B Commerce Enhanced`** as the reference store when present.
 
-> **Part of the `sf-b2b-demo-builder` skill package.** If the user asks for "a complete B2B demo" or "store + catalog", invoke `.cursor/skills/sf-b2b-demo-builder/SKILL.md` first — it routes between this skill and `sf-b2b-catalog-generator` and shares context between them so the user is not asked the same questions twice. This skill on its own only builds the **storefront** (no products); when run as part of the package, its Phase I (product catalog content) is replaced by the more thorough `sf-b2b-catalog-generator`.
+> **Part of the `sf-b2b-demo-builder` skill package.** If the user asks for "a complete B2B demo" or "store + catalog", invoke `.cursor/skills/sf-b2b-demo-builder/SKILL.md` first. This skill is the **full build from zero** path; if the user wants to reuse `SDO - B2B Commerce Enhanced`, use `.cursor/skills/sf-b2b-seeded-sdo-demo/SKILL.md` instead. This skill on its own only builds the **storefront** (no products); when run as part of the package, its Phase I (product catalog content) is replaced by the more thorough `sf-b2b-catalog-generator`.
 
 ## Target environment
 
@@ -826,6 +826,8 @@ After this phase the Standard and VIP buyers can log in directly with `standard.
 ## Phase F2 — Branding (logo, colors, hero copy) via DigitalExperienceBundle
 
 All B2B Commerce LWR branding lives **inside the site bundle**, no Builder-only steps needed:
+
+> Shared reference: `.cursor/skills/sf-b2b-shared/references/DIGITAL_EXPERIENCE_BRANDING.md`. Keep that file updated for reusable DigitalExperienceBundle branding patterns that apply to both this full-build skill and the seeded-SDO demo skill.
 
 | File (under `digitalExperiences/site/<SITE_BUNDLE>/`) | Purpose |
 |----|----|

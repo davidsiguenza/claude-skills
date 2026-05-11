@@ -47,7 +47,7 @@ Live validation against `DentaidNew` SDO surfaced several corrections to earlier
 
 9. **Header names are exact** — the importer rejects friendly aliases. `Description`, `Media Standard Alt Text 1`, and `Media Standard Alt Text 2` failed in a live SDO run. Use `Product Description`, `Media Standard AltText 1`, and `Media Standard AltText 2` exactly as defined in `CSV_SCHEMA.md`.
 
-10. **Path B/C seeded-store demos need catalog surface cleanup after import** — importing a client catalog into `SDO - B2B Commerce Enhanced` does not remove the original Cirrus/Solar seeded products or categories. To make the site look like a client demo, delete only the old `ProductCategoryProduct` rows for non-demo SKUs, then delete empty seeded `ProductCategory` rows. Do not delete old `Product2`, `PricebookEntry`, or `CommerceEntitlementProduct` rows unless explicitly requested; removing category links is sufficient to hide seeded products from PLP/menu/search after reindex.
+10. **Seeded-SDO demos need catalog surface cleanup after import** — importing a client catalog into `SDO - B2B Commerce Enhanced` does not remove the original Cirrus/Solar seeded products or categories. To make the site look like a client demo, delete only the old `ProductCategoryProduct` rows for non-demo SKUs, then delete empty seeded `ProductCategory` rows. Do not delete old `Product2`, `PricebookEntry`, or `CommerceEntitlementProduct` rows unless explicitly requested; removing category links is sufficient to hide seeded products from PLP/menu/search after reindex. The full operational flow lives in `sf-b2b-seeded-sdo-demo`.
 
 ## The 5-step flow
 
@@ -340,7 +340,7 @@ If any counter is short, **don't run the post-import wiring** (search index rebu
 
 | Use the API | Use the UI |
 |---|---|
-| Path C (demo-builder full flow) where every step should be automated | The user prefers visual progress / cancellation control |
+| Full demo flow where every step should be automated | The user prefers visual progress / cancellation control |
 | Repeatable demos against the same org | First-time exploring an unfamiliar org |
 | The probe in Step 0 returned the endpoint exists | The probe returned `NOT_FOUND` |
 
